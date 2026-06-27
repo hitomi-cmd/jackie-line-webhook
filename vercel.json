@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/webhook.js": {
+      "maxDuration": 30
+    },
+    "api/step-delivery.js": {
+      "maxDuration": 60
+    }
+  }
+}
