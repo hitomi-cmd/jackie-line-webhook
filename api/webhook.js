@@ -298,10 +298,38 @@ async function onTextMessage(userId, text, replyToken) {
   const newTag = await appendTag(userId, '要対応');
   await updateFriend(userId, { '最終接触': new Date().toISOString(), 'タグ': newTag });
 
+  // 「診断」→ 8タイプ診断を開始
   if (DIAGNOSIS_ENABLED && text.replace(/\s/g, '') === '診断') {
     await startDiagnosis(userId, replyToken);
     return;
   }
+
+  // 「相談」→ 個別面談案内を自動返信（replyToken使用のため通数カウントなし）
+  if (text.replace(/\s/g, '') === '相談') {
+    const consultMsg =
+      'ご相談ありがとうございます。\n' +
+      '個別面談の候補日を3つほどお送りください。\n' +
+      'ご希望の日時に合わせて、〜1時間程度で個別相談を組ませていただきます。\n\n' +
+      '例)⚪\n' +
+      '①平日18:00以降\n' +
+      '②火曜日10:00-12:00の間\n' +
+      '③平日は20:00-、土日は終日\n' +
+      'などでもOK\n\n' +
+      '【個別面談希望（コピペでお使いください）】\n' +
+      '①   月　日　　時〜　時\n' +
+      '②   月　日　　時〜　時\n' +
+      '③   月　日　　時〜　時\n\n' +
+      '確認次第、日程および個別面談リンクをお送りいたします。';
+    try {
+      await replyMessage(replyToken, [textMsg(consultMsg)]);
+      await logChat(userId, 'out', '[相談] 個別面談案内を自動返信');
+    } catch (err) {
+      console.error('[相談] 自動返信失敗:', err);
+      // 失敗しても処理を止めない（会話ログを見てじゃっきーさんが手動対応可能）
+    }
+    return;
+  }
+
   if (REPLY_MODE === 'manual') return;
   if (REPLY_MODE === 'ack') {
     await replyMessage(replyToken, [textMsg(ACK_TEXT)]);
