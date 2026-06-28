@@ -378,10 +378,7 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'forbidden' });
   }
 
-  // 即200を返す（LINEのタイムアウト対策）
-  res.status(200).json({ ok: true });
-
-  // イベント処理を非同期で実行
+  // イベント処理を先に実行してから200を返す
   const events = req.body.events || [];
   for (const event of events) {
     const userId = event.source && event.source.userId;
@@ -407,4 +404,7 @@ export default async function handler(req, res) {
       console.error('handleEvent error:', err);
     }
   }
+
+  // 全処理完了後に200を返す
+  return res.status(200).json({ ok: true });
 }
