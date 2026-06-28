@@ -193,6 +193,99 @@ async function getLineProfile(userId) {
 // ============================================================
 // 8タイプ診断
 // ============================================================
+// ============================================================
+// 事前アンケート（4問）→ 完了後に8タイプ診断へ
+// ============================================================
+const SURVEY_QUESTIONS = [
+  {
+    text: 'まず4つの質問にお答えください！\n①あなたの年齢を教えてください',
+    options: ['10〜20代', '30代', '40代', '50代以上'],
+    key: '年齢層',
+  },
+  {
+    text: '②性別を教えてください',
+    options: ['男性', '女性', 'その他', '回答しない'],
+    key: '性別',
+  },
+  {
+    text: '③現在の年収を教えてください',
+    options: ['〜300万円', '300〜500万円', '500〜800万円', '800万円以上'],
+    key: '現年収',
+  },
+  {
+    text: '④理想の副業収入は？\n今の月収にプラスしていくら？',
+    options: ['＋1万〜3万円', '＋3万〜5万円', '＋5万〜10万円', '＋10万円以上'],
+    key: '理想副業収入',
+  },
+];
+
+function surveyQuestionMsg(qNum, prevAns = []) {
+  const q = SURVEY_QUESTIONS[qNum - 1];
+  const actions = q.options.map((label, i) => ({
+    type: 'postback',
+    label: label,
+    data: `action=survey_ans&q=${qNum}&opt=${i}&surveyAns=${JSON.stringify(prevAns)}`,
+    displayText: label,
+  }));
+  return buttonsTemplate(q.text, actions);
+}
+
+async function startSurvey(userId, replyToken) {
+  // ユーザーがDBにいない場合は先に登録
+  const existing = await getFriend(userId);
+  if (!existing) {
+    const profile = await getLineProfile(userId);
+    await upsertFriend(userId, {
+      userId,
+      '表示名': profile.displayName || '',
+      '登録日時': new Date().toISOString(),
+      'ステータス': '友だち',
+      '現在ステップ': 0,
+      'タグ': '診断',
+      'optOut': false,
+      '診断タイプ': '',
+      '診断状態': '',
+      '最終接触': new Date().toISOString(),
+    });
+  }
+  await replyMessage(replyToken, [
+    textMsg(
+      '【好きな時に好きな場所で働くための、在宅診断】\n\n' +
+      'あなたに合った在宅副業のスタイルと、長く稼ぎ続けるために知っておくべきタイプを診断します。\n\n' +
+      'まず4つの質問にお答えください。直感でOKです！'
+    ),
+    surveyQuestionMsg(1, []),
+  ]);
+  await logChat(userId, 'out', '[診断] アンケート開始');
+}
+
+async function answerSurvey(userId, q, opt, prevAns, replyToken) {
+  const newAns = [...prevAns, opt];
+
+  if (newAns.length >= SURVEY_QUESTIONS.length) {
+    // アンケート完了 → スプレッドシートに保存 → 診断スタート
+    const surveyData = {};
+    SURVEY_QUESTIONS.forEach((sq, i) => {
+      surveyData[sq.key] = sq.options[newAns[i]] || '';
+    });
+    try {
+      await updateFriend(userId, surveyData);
+    } catch (err) {
+      console.error('[survey] スプレッドシート保存失敗:', err);
+      // 失敗しても診断は続行（ユーザー体験を止めない）
+    }
+    await replyMessage(replyToken, [
+      textMsg('ありがとうございます！\nでは本題の診断です。\n直感で、一番近いものを5問選んでください。'),
+      diagQuestionMsg(1, []),
+    ]);
+    await logChat(userId, 'out', '[診断] アンケート完了→診断開始');
+  } else {
+    const nextQ = q + 1;
+    await replyMessage(replyToken, [surveyQuestionMsg(nextQ, newAns)]);
+    await logChat(userId, 'out', `[診断] アンケートQ${nextQ}`);
+  }
+}
+
 const DIAG_QUESTIONS = [
   { text: 'お金に関して、あなたに一番近いのはどれですか？', options: [
     { label: '損してもいつか戻るとそのままに', type: 'A' },
@@ -228,44 +321,82 @@ const DIAG_QUESTIONS = [
 
 const DIAG_PRIORITY = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
+// 在宅副業→FXへの共通の流れ（全タイプ共通）
+const ZAITAKU_BRIDGE =
+  '\n\n' +
+  '---\n\n' +
+  '在宅で副業を考えた時、\n' +
+  'ライティング・データ入力・ハンドメイドなど\n' +
+  '「時間やスキルを売る仕事」はたくさんあります。\n\n' +
+  'でも、これには共通した天井があります。\n\n' +
+  '　働いた時間＝収入\n\n' +
+  '体力や時間の上限が、そのまま収入の上限になる。\n' +
+  '本業と並行すれば、いつか必ず限界が訪れます。\n\n' +
+  'だから僕がおすすめするのはFX。\n' +
+  '時間・場所を選ばず、スキルが身につくほど収入が伸びる。\n' +
+  '好きな時に好きな場所で働ける、数少ない副業です。\n\n' +
+  'ただし、上で診断したあなたの傾向は、\nFXでも同じように出やすいポイント。\n' +
+  'だからこそ、先に知っておくことが大切です。';
+
+// 診断結果の末尾（秘伝書＋CTA）
 const DIAG_SUFFIX =
-  '\n\nそんなあなたに気を付けてほしいポイント・僕が習得したコツをまとめた秘伝書を、特別に明日もお届けします。\n' +
-  'さらに詳しく聞きたい方は、メニューから「相談」と入力してみてください。個別で相談に応じます。\n\n' +
+  '\n\nそんなあなたに気を付けてほしいポイント・\n' +
+  '僕が習得したコツをまとめた秘伝書を、\n' +
+  '特別に明日もお届けします。\n\n' +
+  'さらに詳しく聞きたい方は、\nメニューから「相談」と入力してみてください。\n' +
+  '個別で相談に応じます。\n\n' +
   '※投資は自己責任です。\n※成果を保証するものではありません。';
 
 const DIAGNOSIS = {
-  A: '【塩漬け型】\nFXを始めると、損が出た時に「いつか戻るはず」とそのまま放置してしまう傾向があります。\n' +
-     '小さな損を見て見ぬふりするうちに、気づいたら大きな穴になっていた…というパターンになりやすいです。\n' +
-     '大切なのは「ここまで来たら一度やめる」というルールを事前に決めておくこと。\n' +
-     '感情ではなく、ルールで動けるようになると結果が変わります。',
+  A: '【診断結果】あなたは「損切りできない・塩漬け型」\n\n' +
+     '損が出た時に「いつか戻るかも」とそのまま放置してしまう傾向があります。\n' +
+     'もったいない気持ちが先に立って、現実から目をそらしがち。\n' +
+     '小さな損を見て見ぬふりするうちに、気づいたら大きな穴になっていた…というパターンです。\n\n' +
+     'キーワードは「先にルールを決める」こと。\n' +
+     '感情ではなく、あらかじめ決めたルールで動けるようになると結果が変わります。' +
+     ZAITAKU_BRIDGE,
 
-  B: '【リベンジ型】\nFXを始めると、損をした後に「すぐ取り返さなきゃ」と焦って動いてしまう傾向があります。\n' +
-     '冷静さを欠いた状態での行動が、さらなる損につながりやすいです。\n' +
-     '「1回の損の上限を決めて、超えたら今日は終わり」というルールが、あなたには特に重要になります。',
+  B: '【診断結果】あなたは「取り返そうとする・リベンジ型」\n\n' +
+     '損をした後に「すぐ取り返さなきゃ」と焦って動いてしまう傾向があります。\n' +
+     '冷静さを欠いた状態での行動が、さらなる損につながりやすいです。\n\n' +
+     '「1回の損の上限を決めて、超えたら今日はやめる」\nこのルールが、あなたには特に重要になります。' +
+     ZAITAKU_BRIDGE,
 
-  C: '【手法ジプシー型】\nFXを始めると、うまくいかないとすぐに「別のやり方」を探してしまう傾向があります。\n' +
-     '方法を変え続けると、何が良くて何が悪かったのかわからなくなります。\n' +
-     '1つのやり方を最低1〜3か月は続けて記録することが、上達への近道です。',
+  C: '【診断結果】あなたは「すぐ別の方法を探す・手法ジプシー型」\n\n' +
+     'うまくいかないとすぐに「別のやり方」を探してしまう傾向があります。\n' +
+     '方法を変え続けると、何が良くて何が悪かったのか分からなくなります。\n\n' +
+     '1つのやり方を最低1〜3か月は続けて記録すること。\nそれが上達への最短ルートです。' +
+     ZAITAKU_BRIDGE,
 
-  D: '【他人軸型】\nFXを始めると、「誰かがいいと言ったから」という理由で動いてしまいやすいです。\n' +
-     '他人のタイミングと自分のタイミングは違うので、鵜呑みにするのは危険です。\n' +
-     '「なぜそう言えるのか」を自分で考える習慣をつけることが大切です。',
+  D: '【診断結果】あなたは「誰かの意見がないと動けない・他人軸型」\n\n' +
+     '「信頼できる人がいいと言ったから」という理由で動いてしまいやすいです。\n' +
+     '他人のタイミングと自分のタイミングは違うため、鵜呑みにするのは危険です。\n\n' +
+     '「なぜそう言えるのか」を自分で考える習慣を\nつけることが大切です。' +
+     ZAITAKU_BRIDGE,
 
-  E: '【一発逆転型】\nFXを始めると、「これはいける！」と感じた時に大きく賭けてしまいやすいです。\n' +
-     '自信がある時ほど冷静さが必要で、気持ちではなくルールで金額を決めることが重要です。\n' +
-     '「感情が高まっている時こそ、一歩立ち止まる」を合言葉にしてください。',
+  E: '【診断結果】あなたは「ここぞの時に大きく動く・一発逆転型」\n\n' +
+     '「これはいける！」と感じた時に、思いきって大きく動いてしまいやすいです。\n' +
+     '自信がある時こそ冷静さが必要で、感情ではなくルールで動くことが重要です。\n\n' +
+     '「テンションが上がっている時こそ、一呼吸置く」\nこれを合言葉にしてください。' +
+     ZAITAKU_BRIDGE,
 
-  F: '【評論家型】\nFXを始めると、勉強はするけどなかなか動けない…というループに入りやすいです。\n' +
-     '「もっと知識が必要」と感じるのは自然なことですが、小さく動かないと実感は得られません。\n' +
-     '失っても痛くない金額でまず体験することが、何より大切な第一歩です。',
+  F: '【診断結果】あなたは「調べるけど動けない・評論家型」\n\n' +
+     '勉強はするけど、なかなか行動に移せない…というループに入りやすいです。\n' +
+     '「もっと知識が必要」と感じるのは自然なことですが、\n動かないと実感は得られません。\n\n' +
+     'まず失っても痛くない小さな金額で体験すること。\nそれが何よりの第一歩です。' +
+     ZAITAKU_BRIDGE,
 
-  G: '【感情ジェットコースター型】\nFXを始めると、うまくいった日は舞い上がり、失敗した日は落ち込む波が大きくなりやすいです。\n' +
-     '感情に引っ張られた行動が、判断を狂わせます。\n' +
-     '「結果ではなく、自分で決めたルールを守れたか」で自分を評価する視点を持つことが大切です。',
+  G: '【診断結果】あなたは「感情の波が大きい・感情ジェットコースター型」\n\n' +
+     'うまくいった日は舞い上がり、うまくいかない日は落ち込む。\n' +
+     'その波がそのまま判断を狂わせてしまいます。\n\n' +
+     '「結果ではなく、自分で決めたルールを守れたか」\nで自分を評価する視点を持つことが大切です。' +
+     ZAITAKU_BRIDGE,
 
-  H: '【ながら作業型】\nFXを始めると、「ちょっとの間に」「片手間で」と軽い気持ちで動いてしまいやすいです。\n' +
-     '集中できない環境での判断は精度が落ちます。\n' +
-     '「見る時間を決める」「その時間だけ集中する」というシンプルなルールが効果的です。',
+  H: '【診断結果】あなたは「ながら作業で進めてしまう・ながら型」\n\n' +
+     '「ちょっとの間に」「片手間で」と、軽い気持ちで動いてしまいやすいです。\n' +
+     '集中できない環境での判断は精度が落ちます。\n\n' +
+     '「見る時間を決める」「その時間だけ集中する」\nこのシンプルなルールが、あなたには効果的です。' +
+     ZAITAKU_BRIDGE,
 };
 
 Object.keys(DIAGNOSIS).forEach(k => {
@@ -328,9 +459,9 @@ async function onTextMessage(userId, text, replyToken) {
   const newTag = await appendTag(userId, '要対応');
   await updateFriend(userId, { '最終接触': new Date().toISOString(), 'タグ': newTag });
 
-  // 「診断」→ 8タイプ診断を開始
+  // 「診断」→ 事前アンケート→8タイプ診断を開始
   if (DIAGNOSIS_ENABLED && text.replace(/\s/g, '') === '診断') {
-    await startDiagnosis(userId, replyToken);
+    await startSurvey(userId, replyToken);
     return;
   }
 
@@ -370,7 +501,20 @@ async function onTextMessage(userId, text, replyToken) {
 async function onPostback(userId, data, replyToken) {
   if (!DIAGNOSIS_ENABLED) return;
   const params = parseQuery(data);
-  if (params.action === 'diag_start') { await startDiagnosis(userId, replyToken); return; }
+
+  // リッチメニュー等から診断スタート
+  if (params.action === 'diag_start') { await startSurvey(userId, replyToken); return; }
+
+  // 事前アンケートの回答
+  if (params.action === 'survey_ans') {
+    const q = Number(params.q);
+    const opt = Number(params.opt);
+    const prevAns = params.surveyAns ? JSON.parse(params.surveyAns) : [];
+    await answerSurvey(userId, q, opt, prevAns, replyToken);
+    return;
+  }
+
+  // 8タイプ診断の回答
   if (params.action === 'diag_ans') {
     const q = Number(params.q);
     const opt = Number(params.opt);
