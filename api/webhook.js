@@ -242,12 +242,12 @@ Object.keys(DIAGNOSIS).forEach(k => {
   DIAGNOSIS[k] += '\n\n詳しく知りたい人は、下のメニューからどうぞ。\n個別面談の申し込み、または僕のことが分かるページをのぞいてみてください。\n\n※投資は自己責任です。\n※成果を保証するものではありません。';
 });
 
-function diagQuestionMsg(qNum) {
+function diagQuestionMsg(qNum, currentAns = []) {
   const q = DIAG_QUESTIONS[qNum - 1];
   const actions = q.options.map((o, i) => ({
     type: 'postback',
     label: o.label,
-    data: `action=diag_ans&q=${qNum}&opt=${i + 1}`,
+    data: `action=diag_ans&q=${qNum}&opt=${i + 1}&ans=${JSON.stringify(currentAns)}`,
     displayText: o.label,
   }));
   return buttonsTemplate(`【質問 ${qNum}/${DIAG_QUESTIONS.length}】\n${q.text}`, actions);
@@ -313,35 +313,56 @@ async function onPostback(userId, data, replyToken) {
   if (!DIAGNOSIS_ENABLED) return;
   const params = parseQuery(data);
   if (params.action === 'diag_start') { await startDiagnosis(userId, replyToken); return; }
-  if (params.action === 'diag_ans') { await answerDiagnosis(userId, Number(params.q), Number(params.opt), replyToken); return; }
+  if (params.action === 'diag_ans') {
+    const q = Number(params.q);
+    const opt = Number(params.opt);
+    const prevAns = params.ans ? JSON.parse(params.ans) : [];
+    await answerDiagnosis(userId, q, opt, prevAns, replyToken);
+    return;
+  }
 }
 
 async function startDiagnosis(userId, replyToken) {
-  await setDiagState(userId, { step: 1, ans: [] });
+  // ユーザーが友だちDBにいない場合は先に登録する（診断状態はボタンデータで管理するのでシート保存不要）
+  const existing = await getFriend(userId);
+  if (!existing) {
+    const profile = await getLineProfile(userId);
+    await upsertFriend(userId, {
+      userId,
+      '表示名': profile.displayName || '',
+      '登録日時': new Date().toISOString(),
+      'ステータス': '友だち',
+      '現在ステップ': 0,
+      'タグ': '診断',
+      'optOut': false,
+      '診断タイプ': '',
+      '診断状態': '',
+      '最終接触': new Date().toISOString(),
+    });
+  }
   await replyMessage(replyToken, [
     textMsg('あなたが勝てない"本当の理由"を診断します。\n直感で、一番近いものを5問選んでください。'),
-    diagQuestionMsg(1),
+    diagQuestionMsg(1, []),
   ]);
   await logChat(userId, 'out', '[診断] 開始');
 }
 
-async function answerDiagnosis(userId, q, opt, replyToken) {
-  const st = await getDiagState(userId);
-  if (!st) { await startDiagnosis(userId, replyToken); return; }
-  if (q !== st.step) { await replyMessage(replyToken, [diagQuestionMsg(st.step)]); return; }
-  st.ans.push(opt);
-  if (st.step >= DIAG_QUESTIONS.length) {
-    const type = computeDiagType(st.ans);
-    await clearDiagState(userId);
+async function answerDiagnosis(userId, q, opt, prevAns, replyToken) {
+  // 状態はボタンのpostbackデータから取得（シート読み書き不要）
+  const newAns = [...prevAns, opt];
+
+  if (newAns.length >= DIAG_QUESTIONS.length) {
+    // 全問回答完了 → 結果を計算してシートに保存
+    const type = computeDiagType(newAns);
     const newTag = await appendTag(userId, '診断済み');
-    await updateFriend(userId, { '診断タイプ': type, 'タグ': newTag });
+    await updateFriend(userId, { '診断タイプ': type, '診断状態': '', 'タグ': newTag });
     await replyMessage(replyToken, [textMsg('診断結果が出ました。\n\nあなたは……\n' + DIAGNOSIS[type])]);
     await logChat(userId, 'out', '[診断結果] ' + type);
   } else {
-    st.step += 1;
-    await setDiagState(userId, st);
-    await replyMessage(replyToken, [diagQuestionMsg(st.step)]);
-    await logChat(userId, 'out', '[診断] Q' + st.step);
+    // 次の質問へ（状態はボタンデータに埋め込む）
+    const nextQ = q + 1;
+    await replyMessage(replyToken, [diagQuestionMsg(nextQ, newAns)]);
+    await logChat(userId, 'out', '[診断] Q' + nextQ);
   }
 }
 
