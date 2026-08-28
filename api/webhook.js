@@ -9,10 +9,15 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
 // 特典マッピング
 const GIFTS = {
-  day0: { title: '初心者が最初の3か月で"溶かす"5つの典型パターンと回避法', url: 'https://drive.google.com/file/d/1ZsuyNqTwhmgKzy2CDT922UoAzreI9fAm/view?usp=sharing' },
   day1: { title: '唯一守っている資金管理ルール（1枚シート）',               url: 'https://drive.google.com/file/d/1dx75Vi5IVAxlF50OI6DdmdEFWpf2EiUI/view?usp=sharing' },
   day3: { title: 'トレードを辞めずに続ける7つの心構え',                     url: 'https://drive.google.com/file/d/1ANmkTtKNlZG2TcFBLDFrgal7SYMCgXXn/view?usp=sharing' },
   day5: { title: 'ゼロから"自分なりの勝ち方"を作る90日ロードマップ',        url: 'https://drive.google.com/file/d/1AwYMlwvP8f_7TsepA8TRoo5irQzV9l3U/view?usp=sharing' },
+};
+
+// 登録直後にお渡しするツール（旧Day0特典と差し替え）
+const TOOL = {
+  title: '生活を壊さない上限額 3分チェック',
+  url: 'https://lifesafe3d-g3prdhvq.manus.space',
 };
 
 const STEP_SCHEDULE  = [1, 3, 5];
@@ -341,8 +346,8 @@ const ZAITAKU_BRIDGE =
 // 診断結果の末尾（秘伝書＋CTA）
 const DIAG_SUFFIX =
   '\n\nそんなあなたに気を付けてほしいポイント・\n' +
-  '僕が習得したコツをまとめた秘伝書を、\n' +
-  '特別に明日もお届けします。\n\n' +
+  '僕が習得したコツをまとめた秘伝書も、\n' +
+  'このあと順番にお届けします。\n\n' +
   'さらに詳しく聞きたい方は、\nメニューから「相談」と入力してみてください。\n' +
   '個別で相談に応じます。\n\n' +
   '※投資は自己責任です。\n※成果を保証するものではありません。';
@@ -442,16 +447,23 @@ async function onFollow(userId, replyToken) {
     '診断状態': '',
     '最終接触': new Date().toISOString(),
   });
-  const g = GIFTS.day0;
+
   await replyMessage(replyToken, [textMsg(
     `はじめまして、登録ありがとうございます。\n\n` +
-    `まず最初に、僕自身が最初にやらかした「お金を溶かす5パターン」をまとめた特典をお渡しします。\n` +
-    `先に"失敗の地図"を持っておくだけで、無駄に溶かす確率はかなり下げられます。\n\n` +
-    `▼${g.title}\n${g.url}\n\n` +
-    `「診断」と送ると、あなたのトレードタイプが分かります。よかったら試してみてください。\n\n` +
-    `気になることがあれば、いつでもこのトークに送ってください。`
+    `まず最初に、いちばん大事なものからお渡しします。\n\n` +
+    `▼${TOOL.title}\n${TOOL.url}\n\n` +
+    `7つの数字を入れるだけで、\n` +
+    `あなたが「ここから先は使ってはいけない」金額が出ます。\n\n` +
+    `僕が最初にやったのは、\nこの線を引かずに始めることでした。\n` +
+    `結果、家賃も払えないところまでいきました。\n\n` +
+    `勝ち方を探す前に、負け方を決めておく。\n` +
+    `順番はこっちだったな、と今は思います。\n\n` +
+    `入力した数字はどこにも送信されません。\n` +
+    `その場で計算して消えるだけなので、安心して使ってください。\n\n` +
+    `気になることがあれば、いつでもこのトークに送ってください。\n\n` +
+    `※投資は自己責任です。\n※成果を保証するものではありません。`
   )]);
-  await logChat(userId, 'out', '[follow] Day0特典配信');
+  await logChat(userId, 'out', '[follow] 上限額チェックツール配信');
 }
 
 async function onTextMessage(userId, text, replyToken) {
@@ -522,31 +534,6 @@ async function onPostback(userId, data, replyToken) {
     await answerDiagnosis(userId, q, opt, prevAns, replyToken);
     return;
   }
-}
-
-async function startDiagnosis(userId, replyToken) {
-  // ユーザーが友だちDBにいない場合は先に登録する（診断状態はボタンデータで管理するのでシート保存不要）
-  const existing = await getFriend(userId);
-  if (!existing) {
-    const profile = await getLineProfile(userId);
-    await upsertFriend(userId, {
-      userId,
-      '表示名': profile.displayName || '',
-      '登録日時': new Date().toISOString(),
-      'ステータス': '友だち',
-      '現在ステップ': 0,
-      'タグ': '診断',
-      'optOut': false,
-      '診断タイプ': '',
-      '診断状態': '',
-      '最終接触': new Date().toISOString(),
-    });
-  }
-  await replyMessage(replyToken, [
-    textMsg('あなたが勝てない"本当の理由"を診断します。\n直感で、一番近いものを5問選んでください。'),
-    diagQuestionMsg(1, []),
-  ]);
-  await logChat(userId, 'out', '[診断] 開始');
 }
 
 async function answerDiagnosis(userId, q, opt, prevAns, replyToken) {
